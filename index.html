@@ -885,7 +885,7 @@ function buildResultPostForCard(match, resultData) {
   const rd = raceDate || race.raceDate || '';
   const rt = raceTitle || '';
 
-  return `💀【死に枠 結果報告】${dateStr} ${venue} ${raceNumStr} ${courseTag}`
+  return `💀【死に枠 結果報告】 ${dateStr} ${venue} ${raceNumStr} ${race.surf||''}${race.dist||''}`
 
 事前に${deadWaku}枠を死に枠認定⚠️
 ${horseLines}
@@ -927,7 +927,7 @@ function buildResultPost(qualified, resultData) {
   const tag = `${venue}${raceNum}`;
   const courseTag = (match.race.courseKey || '').replace(/m$/, '');
 
-  return `💀【死に枠 結果報告】${dateStr} ${venue} ${raceNumStr} ${courseTag}`
+ return `💀【死に枠 結果報告】 ${dateStr} ${venue} ${raceNumStr} ${race.surf||''}${race.dist||''}`
 
 事前に${deadWaku}枠を死に枠認定⚠️
 ${horseLines}
