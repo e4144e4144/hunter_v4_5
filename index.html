@@ -256,8 +256,8 @@ function parseText(text,filename){
     normText.match(/(ダート|芝)[\s・‧]*(\d{3,4})\s*m/),
   ]){if(!cm)continue;if(/^\d+$/.test(cm[1])){dist=cm[1]+'m';surf=cm[2].includes('ダ')?'ダート':'芝';}else{surf=cm[1].includes('ダ')?'ダート':'芝';dist=cm[2]+'m';}break;}
   const courseKey=venue+surf+dist;
-  const tmTitle=normText.slice(0,500).match(/(\S+(?:ステークス|賞|杯|カップ|特別))/);
-  raceTitle=tmTitle?tmTitle[1]:'';
+  const tmTitle=normText.slice(0,500).match(/[\u4E00-\u9FFF\u30A0-\u30FF\uFF65-\uFF9F]{2,}(?:ステークス|トロフィー|カップ|記念|特別|大賞典|賞(?!金)|杯)/);
+  raceTitle=tmTitle?tmTitle[0]:'';
   const raceName=venue+raceNum+(raceTitle?' '+raceTitle:'');
   // raceNumを単体でも保持（タイトル生成用）
   const raceNumOnly=raceNum;
