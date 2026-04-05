@@ -294,7 +294,7 @@ function parseText(text,filename){
     // パターン2: 馬名行 + 後続1〜3行にオッズ OR 出走取消
     const nm=nameOnlyPat.exec(l)||nameOnlyPat.exec(lStripped);
     const isChakusa=chakusaPat.test(l);
-    if(nm&&!skipWords.has(nm[1])&&nm[1].length>=3&&!l.includes('/')&&!isChakusa){
+    if(nm&&!skipWords.has(nm[1])&&nm[1].length>=3&&!l.includes('/')&&!isChakusa&&!/美浦|栗東/.test(l)){
       for(let la=1;la<=3;la++){
         if(ni+la<lines.length){
           const nxt=lines[ni+la];
@@ -375,10 +375,12 @@ function parseText(text,filename){
     corners_extra.forEach(c=>{if(!allCorners.includes(c))allCorners.push(c);});
     const corners=allCorners.slice(0,8);
 
-    // ★位置ベースで「この父行の直前にある馬名行」を探す（最大15行前）
+    // ★位置ベースで「この父行の直前にある馬名行」を探す（前の父行より後のみ）
     let horseName='';
+    const prevFi = idx>0 ? fatherIdxs[idx-1] : -1;
     for(let b=1;b<=15;b++){
       if(fi-b<0)break;
+      if(fi-b<=prevFi)break;  // 前の馬の範囲には入らない
       if(horseAtLine[fi-b]!==undefined){horseName=horseAtLine[fi-b];break;}
     }
     // フォールバック1: 同一行に馬名+オッズがある行を直接スキャン（行頭数字除去も試みる）
@@ -386,6 +388,7 @@ function parseText(text,filename){
       const patHL=/^([ァ-ヶーｦ-ﾟ\u4E00-\u9FFF]{3,})\s+[\d.]+\s+\(\d+番[人気]{1,2}\)/;
       for(let b=1;b<=15;b++){
         if(fi-b<0)break;
+        if(fi-b<=prevFi)break;
         const pl=lines[fi-b];
         const mh=pl.match(patHL)||pl.replace(/^\d{1,2}\s+/,'').match(patHL);
         if(mh){horseName=mh[1];break;}
@@ -395,10 +398,11 @@ function parseText(text,filename){
     if(!horseName){
       const patNameOnly=/^([ァ-ヶーｦ-ﾟ\u4E00-\u9FFF]{3,})(?:\s|$)/;
       const patWeight=/^\d{3,4}kg/;
-      const badPat=/^[父母]|^[0-9]|\/|（|^[▲△◇★☆]/;
+      const badPat=/^[父母]|^[0-9]|\/|（|^[▲△◇★☆]|美浦|栗東|調教師|馬主/;
       const skipW=new Set([...skipWords,'出走取消','競走除外']);
       for(let b=1;b<=15;b++){
         if(fi-b<0)break;
+        if(fi-b<=prevFi)break;
         const pl=lines[fi-b];
         // 体重行の直前の行が馬名候補
         if(patWeight.test(pl)&&fi-b-1>=0){
