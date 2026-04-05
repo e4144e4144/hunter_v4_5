@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>死に枠ハンター v4.1</title>
+<title>死に枠ハンター v4.2</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -104,8 +104,8 @@ body{font-family:system-ui,'Noto Sans JP',sans-serif;background:var(--bg);color:
 <div class="hdr">
   <div class="logo">☠</div>
   <div>
-    <div class="hdr-t">死に枠ハンター <span style="font-size:11px;background:rgba(0,229,160,.2);color:#00e5a0;padding:2px 7px;border-radius:4px;margin-left:6px;font-weight:700;letter-spacing:.5px">v4.1</span></div>
-    <div class="hdr-s">v2: 脚質修正 &nbsp;/&nbsp; v3: 同枠5番人気以内2頭以上→除外 &nbsp;/&nbsp; v4: 死に枠36点以上→除外・スコア非表示 &nbsp;/&nbsp; ※オッズはPDF発行時点</div>
+    <div class="hdr-t">死に枠ハンター <span style="font-size:11px;background:rgba(0,229,160,.2);color:#00e5a0;padding:2px 7px;border-radius:4px;margin-left:6px;font-weight:700;letter-spacing:.5px">v4.2</span></div>
+    <div class="hdr-s">v2: 脚質修正 &nbsp;/&nbsp; v3: 同枠5番人気以内2頭以上→除外 &nbsp;/&nbsp; v4: 死に枠36点以上→除外 / v2.0: 複勝率15%以上・最低オッズ2.9倍以下・内枠粘り込みリスク→除外 &nbsp;/&nbsp; ※オッズはPDF発行時点</div>
   </div>
 </div>
 <div class="main">
@@ -448,7 +448,15 @@ function parseText(text,filename){
       const pmB=pl.match(patOddsOnly);
       if(pmB){odds=parseFloat(pmB[1]);ninki=parseInt(pmB[2]);break;}
     }
-    horses.push({name:horseName||`馬${idx+1}`,sire,jockey,trainer,corners,pace:estimatePace(corners),odds,ninki});
+    // 前走着順を取得（成績行「N着 M頭」の最初のN）
+    let prevFinish=99;
+    const patFinish=/(\d{1,2})着\s+\d+頭/;
+    for(let b=1;b<=8;b++){
+      if(fi-b<0)break;
+      const mf=lines[fi-b].match(patFinish);
+      if(mf){prevFinish=parseInt(mf[1]);break;}
+    }
+    horses.push({name:horseName||`馬${idx+1}`,sire,jockey,trainer,corners,pace:estimatePace(corners),odds,ninki,prevFinish});
   });
 
   // 登録頭数（除外馬込み）= PDFに記載の最大馬番 → 枠番計算に使う
@@ -628,7 +636,11 @@ async function runAnalysis(){
       const c3=fh.some(h=>{const o=h.odds||999;return o>=4.0&&o<=10.0;});
       const c4=fh.filter(h=>(h.ninki||999)<=5).length<2;
       const c5=fr?.avg<36;
-      console.log(`死に枠候補: ${worst}枠 avg=${fr?.avg} c②=${c2} c③=${c3} c④=${c4} c⑤=${c5} → ${c2&&c3&&c4&&c5?'★認定':'除外'}`);
+      const c6=fr?.wVal==null||fr.wVal<15.0;
+      const minO=Math.min(...fh.map(h=>h.odds||999));
+      const c7=minO>2.9;
+      const c8=worst>2||!fh.filter(h=>(h.ninki||999)<=5).some(h=>(h.prevFinish||99)<=3);
+      console.log(`死に枠候補: ${worst}枠 avg=${fr?.avg} c②=${c2} c③=${c3} c④=${c4} c⑤=${c5} c⑥=${c6}(wVal=${fr?.wVal?.toFixed(1)}) c⑦=${c7}(minOdds=${minO}) c⑧=${c8} → ${c2&&c3&&c4&&c5&&c6&&c7&&c8?'★認定':'除外'}`);
       console.groupEnd();
       const note=race.courseKey&&DB[race.courseKey]?'':`（DB未登録: ${race.courseKey||'?'}）`;
       setSt(i,`✓ ${race.courseKey||'不明'} ${race.totalHorses}頭${note}`,'ok');
@@ -677,6 +689,19 @@ function renderResults(){
 
       // ★v4追加条件⑤ 死に枠スコアが36点以上なら除外
       if(fr.avg>=36)continue;
+
+      // ★v2.0条件⑥ 枠複勝率15.0%以上なら除外（精度不足）
+      if(fr.wVal!=null&&fr.wVal>=15.0)continue;
+
+      // ★v2.0条件⑦ 枠内最上位馬のオッズが2.9倍以下なら除外（個体能力による統計突破リスク）
+      const minOdds=Math.min(...horses.map(h=>h.odds||999));
+      if(minOdds<=2.9)continue;
+
+      // ★v2.0条件⑧ 1枠か2枠かつ枠内有力馬（5番人気以内）の前走3着以内なら除外（内枠粘り込みリスク）
+      if(worst<=2){
+        const yugou=horses.filter(h=>(h.ninki||999)<=5);
+        if(yugou.some(h=>(h.prevFinish||99)<=3))continue;
+      }
 
       // 全条件通過 → この枠を死に枠として採用（1レース1枠）
       qualified.push({race,scored,waku:worst,score:fr.avg,wVal:fr.wVal});
