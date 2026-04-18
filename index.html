@@ -122,7 +122,7 @@ body{font-family:system-ui,'Noto Sans JP',sans-serif;background:var(--bg);color:
     <button class="clear-btn" id="clear-btn" onclick="clearAll()">✕ クリア</button>
   </div>
   <div id="flist"></div>
-  <div class="hint" id="hint">↑ 出馬表PDFを追加してください（オッズはPDF発行時点の値を使用）</div>
+  <div class="hint" id="hint">↑ 出馬表PDFを追加してください（オッズはPDF取得時点の値を使用）</div>
   <button class="ana-btn" id="ana-btn" disabled>⚡ 全PDFを一括分析して死に枠を特定する</button>
   <div class="loading" id="loading">
     <div class="spin"></div>
@@ -202,10 +202,8 @@ async function extractText(file){
       const x=it.transform[4];
       const fontSize=Math.abs(it.transform[0])||12;
       if(prevY!==null&&Math.abs(y-prevY)>3){
-        // 行が変わった
         text+='\n';
       } else if(prevY!==null&&prevX!==null&&prevW!==null){
-        // 同一行：前アイテム末端と現アイテム開始のギャップでスペース判定
         const gap=x-(prevX+prevW);
         if(gap>fontSize*0.3)text+=' ';
       }
@@ -221,11 +219,9 @@ async function extractText(file){
 
 // ===== パース =====
 function parseText(text,filename){
-  // ① NFKC正規化
   const normText=text.normalize('NFKC');
   const lines=normText.split(/\n+/).map(l=>l.trim()).filter(Boolean);
 
-  // ② 競馬場・レース番号（PDF左上→ファイル名→テキスト）
   const venueList=['中山','東京','阪神','京都','中京','福島','新潟','小倉','函館','札幌'];
   let venue='',raceNum='',raceTitle='';
   const topText=normText.slice(0,300);
@@ -248,7 +244,6 @@ function parseText(text,filename){
   if(!raceNum){const rm=normText.slice(0,300).match(/(\d{1,2})R/);if(rm)raceNum=rm[1]+'R';}
   if(!raceNum)raceNum='R';
 
-  // ③ コース
   let dist='',surf='';
   for(const cm of[
     normText.match(/コース\s*(\d{3,4})\s*m\s*(ダート|芝)/),
@@ -256,42 +251,38 @@ function parseText(text,filename){
     normText.match(/(ダート|芝)[\s・‧]*(\d{3,4})\s*m/),
   ]){if(!cm)continue;if(/^\d+$/.test(cm[1])){dist=cm[1]+'m';surf=cm[2].includes('ダ')?'ダート':'芝';}else{surf=cm[1].includes('ダ')?'ダート':'芝';dist=cm[2]+'m';}break;}
   const courseKey=venue+surf+dist;
-  // レース名: 「Nレース名」を先頭行から抽出（過去走成績の混入防止）
-  // 先頭行は「会場NR ... レース名」の形式
   const firstLine=normText.split('\n')[0]||'';
   const tmTitle=firstLine.match(/\d+R\s+(?:第\d+回\s+)?([\u4E00-\u9FFF\u30A0-\u30FF\uFF65-\uFF9F]{2,}(?:ステークス|トロフィー|カップ|記念|特別|大賞典|賞(?!金)|杯))/);
   raceTitle=tmTitle?tmTitle[1]:'';
   const raceName=venue+raceNum+(raceTitle?' '+raceTitle:'');
-  // raceNumを単体でも保持（タイトル生成用）
   const raceNumOnly=raceNum;
-  // 開催日を抽出（例: "2026年 3月29日" → "2026年3月29日"）
   let raceDate='';
   const dateM=normText.slice(0,150).match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
   if(dateM)raceDate=`${dateM[1]}年${dateM[2]}月${dateM[3]}日`;
 
-  // ④ 馬名収集：各行に馬名フラグを付けて「行→馬名」マップを作成
   const skipWords=new Set([
     '馬主名','調教師名','血統','騎手名','馬名','単勝オッズ','性齢','毛色',
     'コースレコード','付加賞','本賞金','戦績','負担重量','馬体重',
     '枠番','馬番','番戦績','前走','前々走',
     '出走取消','競走除外','出走取消','除外','取消',
   ]);
+
+  // ★修正: 先頭の枠番・馬番（数字2つまで）を除去
+  const stripLeading = l => l.replace(/^(\d{1,2}\s+){1,2}/, '');
+
   const horseFullPat=/([ァ-ヶーｦ-ﾟ\u4E00-\u9FFF]{3,})\s+[\d.]+\s+\(\d+番[人気]{1,2}\)/;
   const nameOnlyPat=/^([ァ-ヶーｦ-ﾟ\u4E00-\u9FFF]{3,})(?:\s|$)/;
   const chakusaPat=/^[ァ-ヶーｦ-ﾟ\u4E00-\u9FFF]+\s*\(\d+\.\d+\)(?!\s*\d+番)/;
   const oddsPat=/[\d.]+\s+\(\d+番[人気]{1,2}\)/;
 
-  // 行インデックス→馬名 のマップを構築
   const horseAtLine={};
   let ni=0;
   while(ni<lines.length){
     const l=lines[ni];
-    // パターン0: 行頭に枠番/馬番の数字がついている場合（例: 「1 マスグラバイト 32.7...」）
-    const lStripped=l.replace(/^\d{1,2}\s+/,'');
-    // パターン1: 1行完結「馬名 オッズ (N番人気)」（行頭数字除去版も試みる）
+    // ★修正: 先頭数字を最大2個除去してからマッチ
+    const lStripped=stripLeading(l);
     const m1=horseFullPat.exec(l)||horseFullPat.exec(lStripped);
     if(m1&&!skipWords.has(m1[1])){horseAtLine[ni]=m1[1];ni++;continue;}
-    // パターン2: 馬名行 + 後続1〜3行にオッズ OR 出走取消
     const nm=nameOnlyPat.exec(l)||nameOnlyPat.exec(lStripped);
     const isChakusa=chakusaPat.test(l);
     if(nm&&!skipWords.has(nm[1])&&nm[1].length>=3&&!l.includes('/')&&!isChakusa&&!/美浦|栗東/.test(l)){
@@ -303,7 +294,6 @@ function parseText(text,filename){
           }
         }
       }
-      // パターン3: 直前行がオッズのみ行（charレベル抽出で行順が逆転するケース）
       if(horseAtLine[ni]===undefined&&ni>0&&/^[\d.]+\s+\(\d+番[人気]{1,2}\)/.test(lines[ni-1])){
         horseAtLine[ni]=nm[1];
       }
@@ -312,7 +302,6 @@ function parseText(text,filename){
     ni++;
   }
 
-  // ⑤ 騎手名抽出（前後行の「(美浦)/(栗東)」の後 OR 専用▲行 OR 父行自体）
   function extractJockey(lines,fi){
     for(let b=1;b<=4;b++){
       const pi=fi-b;if(pi<0)break;
@@ -321,7 +310,6 @@ function parseText(text,filename){
       if(m){
         const after=m[1].trim();
         const fgn=after.match(/^([A-Z]\.[ァ-ヶー]+)/);if(fgn)return fgn[1];
-        // 日本語名のみ抽出して最初の1名（姓名）だけ返す
         const jp=after.replace(/[▲△◇★☆○◎▽]/g,'').split(/\s+/)
           .filter(s=>/^[\u3040-\u9FFF\u2E80-\u2FFF]{1,4}$/.test(s)&&s.length>=1);
         if(jp.length>=2)return jp[0]+jp[1];
@@ -330,7 +318,6 @@ function parseText(text,filename){
       const m2=prev.match(/^[▲△◇]?([\u4E00-\u9FFF\u30A0-\u30FF]{2,6})$/);
       if(m2)return m2[1];
     }
-    // フォールバック: 父行自体から騎手を取得（タイム前の最後の日本語名）
     const fl=lines[fi].replace(/[▲△◇★☆○◎▽]/g,'');
     const tp=fl.match(/\d:\d\d\.\d/);
     if(tp){
@@ -346,8 +333,6 @@ function parseText(text,filename){
     return '';
   }
 
-  // ⑥ 父行を基準に馬データ構築
-  // 馬名は「父行の直前の馬名行」から取得（インデックス対応ではなく位置ベース）
   const horses=[];
   const fatherIdxs=[];
   lines.forEach((fl,i)=>{if(/^[父⽗⽁]/.test(fl)&&fl.length>4)fatherIdxs.push(i);});
@@ -356,7 +341,6 @@ function parseText(text,filename){
     const sm=fl.match(/^[父⽗⽁]\s*(\S+)/);
     const sire=sm?sm[1]:'';
     const jockey=extractJockey(lines,fi);
-    // ★v2修正: 父行だけでなく前後20行の成績行からコーナー順位を収集
     const rawC_father=(fl.match(/\b(\d{1,2}(?:-\d{1,2}){1,3})\b/g)||[]);
     const corners_father=rawC_father.filter(c=>c.split('-').every(x=>+x>=1&&+x<=20)).slice(0,4);
     const corners_extra=[];
@@ -375,26 +359,25 @@ function parseText(text,filename){
     corners_extra.forEach(c=>{if(!allCorners.includes(c))allCorners.push(c);});
     const corners=allCorners.slice(0,8);
 
-    // ★位置ベースで「この父行の直前にある馬名行」を探す（前の父行より後のみ）
     let horseName='';
     const prevFi = idx>0 ? fatherIdxs[idx-1] : -1;
     for(let b=1;b<=15;b++){
       if(fi-b<0)break;
-      if(fi-b<=prevFi)break;  // 前の馬の範囲には入らない
+      if(fi-b<=prevFi)break;
       if(horseAtLine[fi-b]!==undefined){horseName=horseAtLine[fi-b];break;}
     }
-    // フォールバック1: 同一行に馬名+オッズがある行を直接スキャン（行頭数字除去も試みる）
+    // フォールバック1: 馬名+オッズ行を直接スキャン（先頭数字除去も試みる）
     if(!horseName){
       const patHL=/^([ァ-ヶーｦ-ﾟ\u4E00-\u9FFF]{3,})\s+[\d.]+\s+\(\d+番[人気]{1,2}\)/;
       for(let b=1;b<=15;b++){
         if(fi-b<0)break;
         if(fi-b<=prevFi)break;
         const pl=lines[fi-b];
-        const mh=pl.match(patHL)||pl.replace(/^\d{1,2}\s+/,'').match(patHL);
+        const mh=pl.match(patHL)||stripLeading(pl).match(patHL);
         if(mh){horseName=mh[1];break;}
       }
     }
-    // フォールバック2: 馬名のみ行（体重行の直前、かつカタカナ/漢字3文字以上）
+    // フォールバック2
     if(!horseName){
       const patNameOnly=/^([ァ-ヶーｦ-ﾟ\u4E00-\u9FFF]{3,})(?:\s|$)/;
       const patWeight=/^\d{3,4}kg/;
@@ -404,7 +387,6 @@ function parseText(text,filename){
         if(fi-b<0)break;
         if(fi-b<=prevFi)break;
         const pl=lines[fi-b];
-        // 体重行の直前の行が馬名候補
         if(patWeight.test(pl)&&fi-b-1>=0){
           const prev=lines[fi-b-1];
           const nm=patNameOnly.exec(prev);
@@ -412,15 +394,12 @@ function parseText(text,filename){
             horseName=nm[1];break;
           }
         }
-        // 直接：漢字/カタカナ3文字以上かつ数字/スラッシュなし
         const nm2=patNameOnly.exec(pl);
         if(nm2&&!skipW.has(nm2[1])&&!badPat.test(pl)&&nm2[1].length>=3&&
            !/^\d/.test(pl)&&!/[\/（]/.test(pl.slice(0,15))&&
            !/^[父母]/.test(pl)){
-          // 次行または2行後にオッズがある場合のみ採用
           const hasOdds=(fi-b+1<fi&&/[\d.]+\s+\(\d+番[人気]{1,2}\)/.test(lines[fi-b+1]))||
                         (fi-b+2<=fi&&/[\d.]+\s+\(\d+番[人気]{1,2}\)/.test(lines[fi-b+2]||''));
-          // 前行にオッズがある場合も採用（逆転レイアウト）
           const hasOddsPrev=fi-b>0&&/^[\d.]+\s+\(\d+番[人気]{1,2}\)/.test(lines[fi-b-1]);
           if(hasOdds||hasOddsPrev){horseName=nm2[1];break;}
         }
@@ -432,23 +411,23 @@ function parseText(text,filename){
       const tm3=lines[fi-b].match(/([\u4E00-\u9FFF\u2E80-\u2FFF]{2,5})\s*[(（](?:美浦|栗東)[)）]/);
       if(tm3){trainer=tm3[1];break;}
     }
-    // ★v3修正: 単勝オッズ＋人気番号を同時にパース
-    // パターンA: 「馬名 オッズ (N番人気)」が1行に収まるケース
-    // パターンB: 「馬名」行の次行に「オッズ (N番人気)」が来るケース（PDF行分割）
+
+    // ★オッズ取得：先頭数字2個まで除去したlStrippedも試みる
     let odds=999,ninki=999;
     const patFull=/[\u30A0-\u30FF\u4E00-\u9FFF]{3,}\s+([\d.]+)\s+\((\d+)番[人気]{1,2}\)/;
     const patOddsOnly=/^([\d.]+)\s+\((\d+)番[人気]{1,2}\)/;
     for(let b=1;b<=15;b++){
       if(fi-b<0)break;
       const pl=lines[fi-b];
-      // パターンA: 1行完結
-      const pmA=pl.match(patFull);
+      const plS=stripLeading(pl);
+      // パターンA: 1行完結（元行 or 先頭数字除去版）
+      const pmA=pl.match(patFull)||plS.match(patFull);
       if(pmA){odds=parseFloat(pmA[1]);ninki=parseInt(pmA[2]);break;}
-      // パターンB: オッズのみ行（行頭がオッズ数値で始まる）
-      const pmB=pl.match(patOddsOnly);
+      // パターンB: オッズのみ行
+      const pmB=pl.match(patOddsOnly)||plS.match(patOddsOnly);
       if(pmB){odds=parseFloat(pmB[1]);ninki=parseInt(pmB[2]);break;}
     }
-    // 前走着順を取得（成績行「N着 M頭」の最初のN）
+
     let prevFinish=99;
     const patFinish=/(\d{1,2})着\s+\d+頭/;
     for(let b=1;b<=8;b++){
@@ -459,10 +438,8 @@ function parseText(text,filename){
     horses.push({name:horseName||`馬${idx+1}`,sire,jockey,trainer,corners,pace:estimatePace(corners),odds,ninki,prevFinish});
   });
 
-  // 登録頭数（除外馬込み）= PDFに記載の最大馬番 → 枠番計算に使う
   let registeredTotal=horses.length;
   const patWU=/^\d\s+(\d{1,2})\s+/;
-  // パターン2: 「馬番 馬名...」行（枠番なし・8枠馬でよくある）
   const patUO=/^(\d{1,2})\s+[\u30A0-\u30FF\u4E00-\u9FFF]/;
   lines.forEach(l=>{
     const m=patWU.exec(l)||patUO.exec(l);
@@ -507,7 +484,6 @@ function scoreRace(race){
     frames[w]={horses:hsc,avg:avg2,wVal,wSc:+wSc.toFixed(1)};
   }
   const avgSc=+(Object.values(frames).reduce((a,f)=>a+f.avg,0)/8).toFixed(1);
-  // 死に枠：最低スコア枠を1つだけ選出
   const sortedAvg=Object.entries(frames).sort((a,b)=>a[1].avg-b[1].avg);
   const dead=[+sortedAvg[0][0]];
   const ranked=Object.entries(frames).sort((a,b)=>a[1].avg-b[1].avg);
@@ -533,15 +509,10 @@ function buildPost(race,scored,rank,waku){
   const dateStr=race.raceDate||'';
   const raceNumStr=race.raceNum||'';
   const venue=race.venue;
-
-  // 所属馬リスト（オッズ付き）
   const horses=fr?.horses||[];
   const horseLines=horses.map(h=>`${h.name} ${h.odds!=null&&h.odds<999?h.odds+'倍':''}`).join(' / ');
-
-  // ハッシュタグ
   const courseTag=(race.courseKey||'').replace(/m$/,'');
   const raceTag=`${venue}${raceNumStr}`;
-
   const titleLine=`${dateStr} ${venue} ${raceNumStr}${race.raceTitle?' '+race.raceTitle:''} ${race.surf||''}${race.dist||''}`;
   return`${medal}【死に枠】${titleLine}
 
@@ -552,7 +523,6 @@ ${horseLines}
 
 #競馬 #死に枠 #${venue} #${raceTag} #${courseTag}`;
 }
-
 
 // ===== UI =====
 let allFiles=[],allParsed=[],qualified=[];
@@ -568,7 +538,6 @@ const errEl=document.getElementById('err');
 const clearBtn=document.getElementById('clear-btn');
 function showErr(msg){errEl.textContent=msg;errEl.style.display='block';setTimeout(()=>errEl.style.display='none',5000);}
 
-// ドロップ
 document.addEventListener('dragenter',e=>{e.preventDefault();dzLabel.classList.add('over');});
 document.addEventListener('dragover',e=>e.preventDefault());
 document.addEventListener('dragleave',e=>{if(!e.relatedTarget||e.relatedTarget===document.documentElement)dzLabel.classList.remove('over');});
@@ -624,7 +593,6 @@ async function runAnalysis(){
       if(!race.totalHorses)throw new Error('馬データを検出できませんでした');
       const scored=scoreRace(race);
       allParsed.push({race,scored});
-      // ★デバッグ: 各馬のodds/ninki と 死に枠フィルター結果をコンソール出力
       const worst=scored.dead.length?scored.dead[0]:+scored.ranked[0][0];
       const fr=scored.frames[worst];
       const fh=fr?.horses||[];
@@ -658,69 +626,40 @@ async function runAnalysis(){
 // ===== 結果レンダリング =====
 function renderResults(){
   results.style.display='block';
-
-  // ── フェーズ1: 全PDF精査 ──
-  // 仮死に枠 = 各レースの最低スコア枠
-  // 本死に枠 条件:
-  //   ① 14頭立て以上
-  //   ② 仮死に枠に3.9倍以下の馬がいない
-  //   ③ 4.0〜10.0倍の馬が1頭以上いる
   qualified=[];
   allParsed.forEach(({race,scored})=>{
-    // 条件① 14頭立て以上
     if(race.totalHorses<14)return;
-
-    // スコアワースト順に全枠を試みる（最低枠がNGでも次の枠を検討）
-    const ranked=scored.ranked; // スコア昇順
+    const ranked=scored.ranked;
     for(const [wStr] of ranked){
       const worst=+wStr;
       const fr=scored.frames[worst];
       if(!fr)continue;
       const horses=fr.horses||[];
-
-      // 条件② 3.9倍以下の馬がいたら除外
       if(horses.some(h=>(h.odds||999)<=3.9))continue;
-
-      // 条件③ 4.0〜10.0倍の馬が1頭以上いる
       if(!horses.some(h=>{const o=h.odds||999;return o>=4.0&&o<=10.0;}))continue;
-
-      // ★v3追加条件④ 5番人気以内の馬が2頭以上いたら除外
       if(horses.filter(h=>(h.ninki||999)<=5).length>=2)continue;
-
-      // ★v4追加条件⑤ 死に枠スコアが36点以上なら除外
       if(fr.avg>=36)continue;
-
-      // ★v2.0条件⑥ 枠複勝率15.0%以上なら除外（精度不足）
       if(fr.wVal!=null&&fr.wVal>=15.0)continue;
-
-      // ★v2.0条件⑦ 枠内最上位馬のオッズが2.9倍以下なら除外（個体能力による統計突破リスク）
       const minOdds=Math.min(...horses.map(h=>h.odds||999));
       if(minOdds<=2.9)continue;
-
-      // ★v2.0条件⑧ 1枠か2枠かつ枠内有力馬（5番人気以内）の前走3着以内なら除外（内枠粘り込みリスク）
       if(worst<=2){
         const yugou=horses.filter(h=>(h.ninki||999)<=5);
         if(yugou.some(h=>(h.prevFinish||99)<=3))continue;
       }
-
-      // 全条件通過 → この枠を死に枠として採用（1レース1枠）
       qualified.push({race,scored,waku:worst,score:fr.avg,wVal:fr.wVal});
       break;
     }
   });
 
-  // ── フェーズ2: スコアワースト順で10レース選出 ──
   qualified.sort((a,b)=>a.score-b.score);
   const top10=qualified.slice(0,10);
 
-  // ── フェーズ3: ワースト10を全てXポストカードで表示 ──
   const grid=document.getElementById('w3grid');
   grid.innerHTML='';
 
   if(top10.length===0){
     grid.innerHTML='<p style="color:var(--muted);padding:20px;text-align:center">条件を満たす死に枠が見つかりませんでした<br>（14頭立て以上 ＋ 死に枠に4〜10倍の馬が必要）</p>';
   } else {
-    // ランクラベル
     const rankLabel=['🥇','🥈','🥉','4位','5位','6位','7位','8位','9位','10位'];
     top10.forEach(({race,scored,waku,score,wVal},i)=>{
       const postText=buildPost(race,scored,i,waku);
@@ -747,11 +686,9 @@ function renderResults(){
     });
   }
 
-  // ── フェーズ4: 死に枠認定レースのみ表示（スコアなし）──
   const allrEl=document.getElementById('allr');
   allrEl.innerHTML='';
   const wEmojiD=['','⬜','⬛','🟥','🟦','🟨','🟩','🟧','🔳'];
-  // top10のみ表示（死に枠認定済みレースだけ）
   top10.forEach(({race,scored,waku},di)=>{
     const fr=scored.frames[waku];
     const horses=fr?.horses||[];
@@ -783,7 +720,6 @@ function renderResults(){
         </div>
         <div class="res-post-area" style="display:none;margin-top:8px"></div>
       </div>`;
-    // ドロップゾーンのイベント
     const dropEl=div.querySelector('.res-drop');
     dropEl.addEventListener('dragover',e=>{e.preventDefault();dropEl.style.borderColor='var(--red)';dropEl.style.background='rgba(255,59,59,.08)';});
     dropEl.addEventListener('dragleave',()=>{dropEl.style.borderColor='rgba(255,255,255,.2)';dropEl.style.background='';});
@@ -800,7 +736,6 @@ function renderResults(){
         try{
           const text=await extractText(f);
           const rd=parseResultText(text);
-          // このカードのrace/wakuで照合
           const match={race,scored,waku,score:fr?.avg,wVal:fr?.wVal};
           const postText=buildResultPostForCard(match,rd);
           if(postText){
@@ -827,7 +762,6 @@ function renderResults(){
         }
       }
     });
-    // クリックでもファイル選択
     dropEl.addEventListener('click',()=>{
       const inp=document.createElement('input');
       inp.type='file';inp.accept='.pdf';
@@ -842,17 +776,15 @@ function renderResults(){
     });
     allrEl.appendChild(div);
   });
-  // 死に枠なしレースは非表示（セクションタイトルも不要なら隠す）
   if(top10.length===0){
     allrEl.innerHTML='<p style="color:var(--muted);padding:12px;font-size:12px">死に枠認定レースなし</p>';
   }
 }
+
 // ===== 結果PDF処理 =====
 function parseResultText(text) {
   const norm = text.normalize('NFKC');
   const lines = norm.split(/\n+/).map(l => l.trim()).filter(Boolean);
-
-  // レース名・コース抽出（冒頭から）
   const head = norm.slice(0, 400);
   const venueMatch = head.match(/(中山|東京|阪神|京都|中京|福島|新潟|小倉|函館|札幌)\s*(\d{1,2})R/);
   const venue = venueMatch ? venueMatch[1] : '';
@@ -861,68 +793,46 @@ function parseResultText(text) {
   const raceTitle = titleMatch ? titleMatch[1] : '';
   const dateMatch = head.match(/(\d{4}年\d{1,2}月\d{1,2}日)/);
   const raceDate = dateMatch ? dateMatch[1].replace('年','年').replace('月','月') : '';
-
-  // 着順行パース: 「着 枠 馬番 馬名 性齢 斤量 騎手 タイム ...」
-  // または「中止 枠 馬番 馬名...」
   const results = [];
   const patResult = /^(\d{1,2}|中止|取消)\s+(\d)\s+(\d{1,2})\s+([ァ-ヶーｦ-ﾟ\u4E00-\u9FFF（）a-zA-Z]+)/;
-  // 人気は行末付近にある（単人気欄）
   for (const l of lines) {
     const m = l.match(patResult);
     if (!m) continue;
-    const finishing = m[1]; // 着順 or 中止/取消
+    const finishing = m[1];
     const wakuNo = parseInt(m[2]);
     const umaNo = parseInt(m[3]);
     const name = m[4];
-    // 人気: 行末の数字（1〜15）
     const ninkiMatch = l.match(/(\d{1,2})\s*$/);
     const ninki = ninkiMatch ? parseInt(ninkiMatch[1]) : null;
     results.push({ finishing, waku: wakuNo, umaNo, name, ninki });
   }
-
-  // 勝ち馬（1着）
   const winner = results.find(r => r.finishing === '1');
-
   return { venue, raceNum, raceTitle, raceDate, results, winner };
 }
 
-// カード個別用（match = {race, scored, waku} を直接受け取る）
 function buildResultPostForCard(match, resultData) {
   const { venue, raceNum, raceTitle, raceDate, results } = resultData;
   if (!results.length) return null;
-
   const { race, waku } = match;
   const deadWaku = waku;
-
-  // 会場・レース番号が一致するか確認
-  if (race.venue !== venue || race.raceNum !== raceNum) {
-    // 一致しなくてもカード個別ドロップなのでそのまま使う（ユーザーが意図的に投入）
-    // ただし結果データの枠番で死に枠馬を探す
-  }
-
   const deadHorses = results.filter(r => r.waku === deadWaku);
   if (!deadHorses.length) return null;
-
   const horseLines = deadHorses.map(h => {
     const fin = h.finishing === '中止' ? '中止' : h.finishing === '取消' ? '取消' : h.finishing + '着';
     const ninkiStr = h.ninki ? `${h.ninki}番人気` : '';
     return `🔲 ${h.name}（${ninkiStr}） → ${fin}`;
   }).join('\n');
-
   const allOut = deadHorses.every(h => {
     const f = parseInt(h.finishing);
     return isNaN(f) || f > 3;
   });
   const resultMark = allOut ? '✅ 的中' : '❌ ハズレ';
-
   const v = venue || race.venue;
   const rn = raceNum || race.raceNum;
   const tag = `${v}${rn}`;
   const courseTag = (race.courseKey || '').replace(/m$/, '');
   const rd = raceDate || race.raceDate || '';
   const rt = raceTitle || '';
-
-  const courseLine1=(race.courseKey||'').replace(/(芝|ダート)(\d+m)$/,'$1$2').replace(/^.+(芝|ダート)/,'$1')||'';
   const surf1=(race.courseKey||'').match(/芝|ダート/)?.[0]||'';
   const dist1=(race.courseKey||'').match(/\d+m/)?.[0]||'';
   return `💀【死に枠 結果報告】${rd} ${v} ${rn}${rt ? ' ' + rt : ''}${surf1&&dist1?' '+surf1+dist1:''}
@@ -938,35 +848,26 @@ ${resultMark}
 function buildResultPost(qualified, resultData) {
   const { venue, raceNum, raceTitle, raceDate, results } = resultData;
   if (!results.length) return null;
-
-  // 死に枠認定レースと照合（会場+レース番号）
   const match = qualified.find(q => {
     const r = q.race;
     return r.venue === venue && r.raceNum === raceNum;
   });
   if (!match) return null;
-
   const deadWaku = match.waku;
   const deadHorses = results.filter(r => r.waku === deadWaku);
   if (!deadHorses.length) return null;
-
-  // 死に枠馬の結果行
   const horseLines = deadHorses.map(h => {
     const fin = h.finishing === '中止' ? '中止' : h.finishing === '取消' ? '取消' : h.finishing + '着';
     const ninkiStr = h.ninki ? `${h.ninki}番人気` : '';
     return `🔲 ${h.name}（${ninkiStr}） → ${fin}`;
   }).join('\n');
-
-  // 全馬圏外かチェック → 的中判定
   const allOut = deadHorses.every(h => {
     const f = parseInt(h.finishing);
     return isNaN(f) || f > 3;
   });
   const resultMark = allOut ? '✅ 的中' : '❌ ハズレ';
-
   const tag = `${venue}${raceNum}`;
   const courseTag = (match.race.courseKey || '').replace(/m$/, '');
-
   const surf2=(match.race.courseKey||'').match(/芝|ダート/)?.[0]||'';
   const dist2=(match.race.courseKey||'').match(/\d+m/)?.[0]||'';
   return `💀【死に枠 結果報告】${raceDate} ${venue} ${raceNum}${raceTitle ? ' ' + raceTitle : ''}${surf2&&dist2?' '+surf2+dist2:''}
@@ -978,7 +879,6 @@ ${resultMark}
 
 #競馬 #死に枠 #${venue} #${tag} #${courseTag}`;
 }
-
 </script>
 </body>
 </html>
